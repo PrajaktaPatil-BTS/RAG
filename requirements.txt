@@ -7,3 +7,5 @@ tiktoken
 numpy
 pandas
 joblib
+scikit-learn
+scipy
