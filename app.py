@@ -1,158 +1,126 @@
+# app.py
 import streamlit as st
 from chunker import load_pdf, chunk_text
 from retriever import PDFRetriever
 from llm_answer import generate_answer
-import os
 
-# --- Page config ---
-st.set_page_config(page_title="Vridhi Home Finance Chatbot", page_icon="🤖", layout="wide")
 
-# --- Dark theme CSS + Chat bubbles ---
-st.markdown("""
-<style>
-body, .stApp {
-    background-color: #0C0C0C;
-    color: #FFFFFF;
-    font-family: 'Segoe UI', sans-serif;
-}
+# ---------------------------------------------------------
+# Chat Message Styling
+# ---------------------------------------------------------
+def message_box(text, sender="assistant"):
+    text = text.replace("\n", "<br>")
+    
+    if sender == "assistant":
+        st.markdown(
+            f"""
+            <div style="background:#333;color:white;padding:12px;border-radius:10px;
+                        max-width:80%;margin:8px 0;">
+                🤖 <b>Bot:</b><br>{text}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            f"""
+            <div style="background:#4CAF50;color:white;padding:12px;border-radius:10px;
+                        max-width:80%;margin-left:auto;margin:8px 0;">
+                🙋 <b>You:</b><br>{text}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-.chat-container {
-    height: 600px;
-    overflow-y: auto;
-    padding: 15px;
-    border-radius: 10px;
-    background-color: #1E1E1E;
-    border: 1px solid #333;
-}
 
-.user-message {
-    background-color: #4CAF50;
-    color: #FFFFFF;
-    padding: 12px 18px;
-    border-radius: 20px;
-    max-width: 70%;
-    margin-left: auto;
-    margin-bottom: 10px;
-    font-size: 16px;
-}
+# ---------------------------------------------------------
+# MAIN Streamlit APP
+# ---------------------------------------------------------
+def main():
+    st.set_page_config(page_title="PDF Chatbot", layout="wide")
 
-.bot-message {
-    background-color: #333333;
-    color: #FFFFFF;
-    padding: 12px 18px;
-    border-radius: 20px;
-    max-width: 70%;
-    margin-right: auto;
-    margin-bottom: 10px;
-    font-size: 16px;
-}
+    st.title("📘 PDF Chatbot")
 
-.bot-message ul {
-    margin: 5px 0;
-    padding-left: 20px;
-}
+    # ---------------------------------------------------------
+    # SIDEBAR  (Always visible)
+    # ---------------------------------------------------------
+    st.sidebar.header("🔐 Azure OpenAI Credentials")
 
-.sources {
-    font-size: 12px;
-    color: #AAAAAA;
-    margin-top: 5px;
-}
+    # Ensure persistent storage
+    if "AZURE_OPENAI_ENDPOINT" not in st.session_state:
+        st.session_state.update({
+            "AZURE_OPENAI_ENDPOINT": "",
+            "AZURE_OPENAI_API_KEY": "",
+            "AZURE_OPENAI_API_VERSION": "2025-01-01-preview",
+            "AZURE_OPENAI_DEPLOYMENT": "gpt-4.1-mini"
+        })
 
-input, .stTextInput>div>div>input {
-    background-color: #1E1E1E;
-    color: #FFFFFF;
-}
-</style>
-""", unsafe_allow_html=True)
+    st.session_state.AZURE_OPENAI_ENDPOINT = st.sidebar.text_input(
+        "Endpoint", value=st.session_state.AZURE_OPENAI_ENDPOINT
+    )
 
-# --- Layout ---
-col1, col2 = st.columns([1, 3])
+    st.session_state.AZURE_OPENAI_API_KEY = st.sidebar.text_input(
+        "API Key", type="password", value=st.session_state.AZURE_OPENAI_API_KEY
+    )
 
-# --- Left column: PDF Upload ---
-with col1:
-    st.markdown("<h3 style='color:white;'>Upload PDF</h3>", unsafe_allow_html=True)
-    uploaded_file = st.file_uploader("", type=["pdf"])
+    st.session_state.AZURE_OPENAI_API_VERSION = st.sidebar.text_input(
+        "API Version", value=st.session_state.AZURE_OPENAI_API_VERSION
+    )
 
-    if uploaded_file:
-        pdf_path = uploaded_file.name
+    st.session_state.AZURE_OPENAI_DEPLOYMENT = st.sidebar.text_input(
+        "Deployment Name", value=st.session_state.AZURE_OPENAI_DEPLOYMENT
+    )
+
+    # ---------------------------------------------------------
+    # PDF Upload (Sidebar)
+    # ---------------------------------------------------------
+    st.sidebar.header("📄 Upload PDF")
+    uploaded_file = st.sidebar.file_uploader("Upload PDF", type=["pdf"])
+
+    if "retriever" not in st.session_state:
+        st.session_state.retriever = None
+
+    if uploaded_file and st.session_state.retriever is None:
+        pdf_path = "uploaded.pdf"
         with open(pdf_path, "wb") as f:
-            #eturns the binary content of the uploaded PDF. and it locally
             f.write(uploaded_file.getbuffer())
-        st.success("PDF uploaded successfully!")
 
-        # object create retriever
+        pages = load_pdf(pdf_path)
+        chunks = chunk_text(pages)
+
         retriever = PDFRetriever()
-        index_exists = os.path.exists("faiss_tfidf.index") and os.path.exists("tfidf_vectorizer.pkl") and os.path.exists("chunks_with_pages.pkl")
-
-        if index_exists:
-            retriever.load_index()
-        else:
-            pages = load_pdf(pdf_path)
-            chunks = chunk_text(pages, chunk_size=500, overlap=50)
-            retriever.build_index(chunks)
-            st.info(f"Index created with {len(chunks)} chunks.")
-
+        retriever.build_index(chunks)
         st.session_state.retriever = retriever
 
-# --- Right column: Chat ---
-with col2:
-    st.markdown("<h3 style='color:white;'>💬 Vridhi Home Finance Chatbot</h3>", unsafe_allow_html=True)
+        st.sidebar.success("PDF processed successfully!")
 
-    # Initialize chat history
-    if "history" not in st.session_state:
-        st.session_state.history = []
+    # ---------------------------------------------------------
+    # CHAT UI
+    # ---------------------------------------------------------
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-    # Display chat messages in chronological order
-    st.markdown('<div class="chat-container" id="chat">', unsafe_allow_html=True)
-    for chat in st.session_state.history:
-        # User bubble
-        st.markdown(
-            f'<div class="user-message"><b>You:</b> {chat["question"]}</div>', unsafe_allow_html=True
-        )
-        # Bot bubble with formatted answer
-        st.markdown(
-            f'<div class="bot-message"><b>Bot:</b><br>{chat["answer"]}'
-            f'<div class="sources">Sources: {", ".join(map(str, chat["sources"]))}</div></div>',
-            unsafe_allow_html=True
-        )
-    st.markdown('</div>', unsafe_allow_html=True)
+    # Show past messages
+    for msg in st.session_state.messages:
+        message_box(msg["content"], msg["role"])
 
-    # --- User input with callback ---
-    if "user_input" not in st.session_state:
-        st.session_state.user_input = ""
+    # Input box
+    user_input = st.chat_input("Ask something from the PDF…")
 
-    def handle_input():
-        user_question = st.session_state.user_input
-        if user_question and "retriever" in st.session_state:
-            top_chunks = st.session_state.retriever.search(user_question, top_k=3)
-            raw_answer = generate_answer(user_question, top_chunks)
+    if user_input:
+        st.session_state.messages.append({"role": "user", "content": user_input})
+        message_box(user_input, "user")
 
-            # Format numbered lists automatically
-            formatted_answer = raw_answer
-            if any(f"{i}." in raw_answer for i in range(1, 10)):
-                parts = raw_answer.split(' ')
-                lines = raw_answer.split(' 1.')
-                formatted_answer = "<ul>"
-                for i, line in enumerate(lines):
-                    if line.strip():
-                        formatted_answer += f"<li>{line.strip()}</li>"
-                formatted_answer += "</ul>"
+        # Search PDF chunks
+        top_chunks = st.session_state.retriever.search(user_input)
 
-            st.session_state.history.append({
-                "question": user_question,
-                "answer": formatted_answer,
-                "sources": [c["page"] for c in top_chunks]
-            })
+        # LLM Answer
+        answer = generate_answer(user_input, top_chunks)
 
-            # Clear input box
-            st.session_state.user_input = ""
+        st.session_state.messages.append({"role": "assistant", "content": answer})
+        message_box(answer, "assistant")
 
-    st.text_input("Ask a question:", key="user_input", on_change=handle_input)
 
-    # Auto-scroll to bottom
-    st.markdown("""
-    <script>
-    var chatDiv = window.parent.document.querySelector(".chat-container");
-    if(chatDiv){ chatDiv.scrollTop = chatDiv.scrollHeight; }
-    </script>
-    """, unsafe_allow_html=True)
+# Run App
+if __name__ == "__main__":
+    main()
