@@ -6,3 +6,4 @@ langchain
 tiktoken
 numpy
 pandas
+joblib
